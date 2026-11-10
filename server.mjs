@@ -57,6 +57,22 @@ async function syncAppStore(){
   const tomorrow=Date.now()+864e5;
   const entries=data.feed.entry.filter(x=>new Date(x['im:releaseDate']?.label||0).getTime()<=tomorrow).slice(0,100);
   const items=entries.map((x,index)=>({id:x.id?.attributes?.['im:id']||x.id?.label,name:x['im:name']?.label,rank:index+1,source:"App Store",url:x.link?.attributes?.href||x.id?.label,country:"美国",platform:"iOS",category:x.category?.attributes?.label||"待聚类",developer:x['im:artist']?.label||"待核验",launchDate:x['im:releaseDate']?.label?.slice(0,10)||"待核验"}));
+  const lookupBatches=[];
+  for(let i=0;i<items.length;i+=50) lookupBatches.push(items.slice(i,i+50));
+  const lookups=await Promise.allSettled(lookupBatches.map(batch=>curlText([`https://itunes.apple.com/lookup?id=${batch.map(x=>x.id).join(',')}&country=us&entity=software`])));
+  const metadata=new Map();
+  for(const result of lookups){
+    if(result.status!=='fulfilled') continue;
+    for(const app of JSON.parse(result.value).results||[]) metadata.set(String(app.trackId),app);
+  }
+  for(const item of items){
+    const meta=metadata.get(String(item.id));
+    if(!meta) continue;
+    item.rating=meta.averageUserRating??null;
+    item.ratingCount=meta.userRatingCount??0;
+    item.version=meta.version||null;
+    item.category=meta.primaryGenreName||item.category;
+  }
   const historyDays=await saveSnapshot("App Store",date,items);
   return {source:"App Store",date,items,historyDays,sourceUrl};
 }
@@ -115,10 +131,12 @@ async function buildTrackedApps(){
     for(const item of latest.items){
       const rankHistory=window.map(s=>({date:s.date,rank:s.items.find(x=>String(x.id)===String(item.id))?.rank})).filter(x=>Number.isFinite(x.rank));
       const rankDelta=rankHistory.length>1?rankHistory[0].rank-rankHistory.at(-1).rank:null;
+      const ratingHistory=window.map(s=>{const found=s.items.find(x=>String(x.id)===String(item.id));return found&&Number.isFinite(found.ratingCount)?{date:s.date,rating:found.rating??null,ratingCount:found.ratingCount}:null}).filter(Boolean);
+      const ratingCountDelta=ratingHistory.length>1?ratingHistory.at(-1).ratingCount-ratingHistory[0].ratingCount:null;
       const lastThree=rankHistory.slice(-3);
       const continuous=lastThree.length===3&&lastThree.every((x,i)=>i===0||x.rank<lastThree[i-1].rank);
       const trend=continuous?'连续上升':rankHistory.length<2?'待观察':rankDelta>0?'上升':rankDelta<0?'回落':'持平';
-      apps.push({...item,source,id:`${source}-${item.id}`,...classifyDemand(item),rankDelta,rankHistory,historyDays:rankHistory.length,trend,timeline:rankHistory.map(x=>`${x.date} · 排名 #${x.rank}`)});
+      apps.push({...item,source,id:`${source}-${item.id}`,...classifyDemand(item),rankDelta,rankHistory,ratingHistory,ratingCountDelta,historyDays:rankHistory.length,trend,timeline:rankHistory.map(x=>`${x.date} · 排名 #${x.rank}`)});
     }
   }
   const clusterPlatforms=new Map();

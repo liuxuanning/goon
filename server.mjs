@@ -80,6 +80,26 @@ async function syncAll(){
   if(!Object.keys(results).length) throw new Error(Object.values(errors).join('；'));
   return {date:new Date().toISOString().slice(0,10),results,errors};
 }
+async function buildTrackedApps(){
+  const snapshots=(await readSnapshots()).sort((a,b)=>a.date.localeCompare(b.date));
+  const sources=[...new Set(snapshots.map(x=>x.source))];
+  const apps=[];
+  for(const source of sources){
+    const sourceSnaps=snapshots.filter(x=>x.source===source);
+    const latest=sourceSnaps.at(-1);
+    const cutoff=new Date(`${latest.date}T00:00:00Z`).getTime()-7*864e5;
+    const window=sourceSnaps.filter(x=>new Date(`${x.date}T00:00:00Z`).getTime()>=cutoff);
+    for(const item of latest.items){
+      const rankHistory=window.map(s=>({date:s.date,rank:s.items.find(x=>String(x.id)===String(item.id))?.rank})).filter(x=>Number.isFinite(x.rank));
+      const rankDelta=rankHistory.length>1?rankHistory[0].rank-rankHistory.at(-1).rank:null;
+      const lastThree=rankHistory.slice(-3);
+      const continuous=lastThree.length===3&&lastThree.every((x,i)=>i===0||x.rank<lastThree[i-1].rank);
+      const trend=continuous?'连续上升':rankHistory.length<2?'待观察':rankDelta>0?'上升':rankDelta<0?'回落':'持平';
+      apps.push({...item,source,id:`${source}-${item.id}`,rankDelta,rankHistory,historyDays:rankHistory.length,trend,timeline:rankHistory.map(x=>`${x.date} · 排名 #${x.rank}`)});
+    }
+  }
+  return {updatedAt:snapshots.at(-1)?.date||null,apps};
+}
 
 const server=http.createServer(async(req,res)=>{
   try{
@@ -87,6 +107,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.url==="/api/sync/app-store"&&req.method==="POST") return send(res,200,JSON.stringify(await syncAppStore()));
     if(req.url==="/api/sync/product-hunt"&&req.method==="POST") return send(res,200,JSON.stringify(await syncProductHunt()));
     if(req.url==="/api/sync/all"&&req.method==="POST") return send(res,200,JSON.stringify(await syncAll()));
+    if(req.url==="/api/apps") return send(res,200,JSON.stringify(await buildTrackedApps()));
     if(req.url==="/api/snapshots") return send(res,200,JSON.stringify(await readSnapshots()));
     const clean=req.url==="/"?"index.html":req.url.split("?")[0].replace(/^\//,"");
     const file=path.resolve(publicDir,clean);
@@ -98,4 +119,8 @@ const server=http.createServer(async(req,res)=>{
     return send(res,500,JSON.stringify({error:error.message}));
   }
 });
-server.listen(port,"127.0.0.1",()=>console.log(`Goon 趋势雷达：http://127.0.0.1:${port}`));
+if(process.argv.includes('--sync-once')){
+  syncAll().then(result=>{ console.log(JSON.stringify(result)); process.exit(0); }).catch(error=>{ console.error(error.message); process.exit(1); });
+}else{
+  server.listen(port,"127.0.0.1",()=>console.log(`Goon 趋势雷达：http://127.0.0.1:${port}`));
+}

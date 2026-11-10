@@ -1,4 +1,5 @@
 import http from "node:http";
+import https from "node:https";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,10 +13,17 @@ const mime = { ".html":"text/html; charset=utf-8", ".css":"text/css; charset=utf
 const send = (res, status, body, type="application/json; charset=utf-8") => { res.writeHead(status,{"content-type":type,"cache-control":"no-store"}); res.end(body); };
 
 async function readSnapshots(){ try { return JSON.parse(await fs.readFile(snapshotFile,"utf8")); } catch { return []; } }
+function fetchText(url){
+  return new Promise((resolve,reject)=>{
+    const request=https.get(url,{headers:{"user-agent":"Mozilla/5.0 GoonTrendRadar/0.1"}},response=>{
+      if(response.statusCode>=300&&response.statusCode<400&&response.headers.location){ response.resume(); return resolve(fetchText(new URL(response.headers.location,url))); }
+      let body=""; response.setEncoding("utf8"); response.on("data",chunk=>body+=chunk); response.on("end",()=>response.statusCode>=200&&response.statusCode<300?resolve(body):reject(new Error(`榜单请求失败：HTTP ${response.statusCode}`)));
+    });
+    request.setTimeout(20000,()=>request.destroy(new Error("榜单请求超时"))); request.on("error",reject);
+  });
+}
 async function syncGooglePlay(){
-  const response = await fetch("https://appsxray.com/charts?chart=new-free", { headers:{"user-agent":"Mozilla/5.0 GoonTrendRadar/0.1"} });
-  if(!response.ok) throw new Error(`榜单请求失败：HTTP ${response.status}`);
-  const html = await response.text();
+  const html = await fetchText("https://appsxray.com/charts?chart=new-free");
   const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map(m=>m[1]);
   let list;
   for(const block of blocks){

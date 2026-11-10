@@ -1,5 +1,5 @@
 import http from "node:http";
-import https from "node:https";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,11 +15,7 @@ const send = (res, status, body, type="application/json; charset=utf-8") => { re
 async function readSnapshots(){ try { return JSON.parse(await fs.readFile(snapshotFile,"utf8")); } catch { return []; } }
 function fetchText(url){
   return new Promise((resolve,reject)=>{
-    const request=https.get(url,{family:4,headers:{"user-agent":"Mozilla/5.0 GoonTrendRadar/0.1"}},response=>{
-      if(response.statusCode>=300&&response.statusCode<400&&response.headers.location){ response.resume(); return resolve(fetchText(new URL(response.headers.location,url))); }
-      let body=""; response.setEncoding("utf8"); response.on("data",chunk=>body+=chunk); response.on("end",()=>response.statusCode>=200&&response.statusCode<300?resolve(body):reject(new Error(`榜单请求失败：HTTP ${response.statusCode}`)));
-    });
-    request.setTimeout(20000,()=>request.destroy(new Error("榜单请求超时"))); request.on("error",reject);
+    execFile("/usr/bin/curl",["-4","-fsSL","--max-time","30","-A","Mozilla/5.0 GoonTrendRadar/0.1",url],{maxBuffer:10*1024*1024},(error,stdout)=>error?reject(new Error(error.killed?"榜单请求超时":`榜单请求失败：${error.message}`)):resolve(stdout));
   });
 }
 async function syncGooglePlay(){

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Goon 趋势雷达</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><span>Goon</span> 趋势雷达</div>
+    <button class="nav-item active" data-view="all">▥ <span>新品趋势雷达</span></button>
+    <div class="side-label">数据来源</div>
+    <button class="nav-item source-filter" data-source="Google Play 新品榜">▷ <span>Google Play 新品榜</span></button>
+    <button class="nav-item source-filter" data-source="Product Hunt">Ⓟ <span>Product Hunt</span></button>
+    <button class="nav-item source-filter" data-source="App Store">△ <span>App Store</span></button>
+    <button class="nav-item" id="importSide">□ <span>CSV / JSON 导入</span></button>
+    <div class="side-label split">我的视图</div>
+    <button class="nav-item saved-view" data-saved="rising">♡ <span>连续上升</span></button>
+    <button class="nav-item saved-view" data-saved="cross">♡ <span>跨平台潜力</span></button>
+    <button class="nav-item saved-view" data-saved="candidate">♡ <span>我的候选</span><b id="candidateCount">0</b></button>
+    <div class="source-note">公开数据同步只保存榜单快照。至少积累7天后，趋势判断才有意义。</div>
+  </aside>
+  <main class="main">
+    <header><div><h1>新品趋势雷达</h1><p id="updatedAt">尚未同步公开榜单</p></div><div class="header-actions"><label class="search">⌕<input id="searchInput" placeholder="搜索应用名称、需求或开发者"></label><button class="secondary" id="syncBtn">同步新品榜</button><button class="primary" id="importBtn">导入榜单</button><input type="file" id="fileInput" accept=".csv,.json" hidden></div></header>
+    <section class="metrics"><div><span>当前应用</span><strong id="metricTotal">0</strong><small>已载入数据</small></div><div><span>连续上升</span><strong id="metricRising">0</strong><small>需多日快照</small></div><div><span>跨平台需求</span><strong id="metricCross">0</strong><small>同需求多来源</small></div><div><span>待核验证据</span><strong class="amber" id="metricPending">0</strong><small>不能直接进候选</small></div></section>
+    <section class="filters"><label>国家<select id="countryFilter"><option>全部</option></select></label><label>平台<select id="platformFilter"><option>全部</option></select></label><label>时间窗<select id="windowFilter"><option value="7">近7天</option><option value="30">近30天</option></select></label><label>类别<select id="categoryFilter"><option>全部</option></select></label><label>证据<select id="evidenceFilter"><option>全部</option><option>充分</option><option>待核验</option><option>噪声</option></select></label><button class="text-btn" id="resetBtn">重置</button><span class="data-mode" id="dataMode">示例数据</span></section>
+    <section class="workspace">
+      <div class="table-wrap"><table><thead><tr><th>应用</th><th>来源</th><th>上线天数</th><th>7日排名变化</th><th>评分增长</th><th>需求聚类</th><th>趋势判断</th><th>证据</th></tr></thead><tbody id="appRows"></tbody></table><div class="empty" id="emptyState" hidden>没有符合条件的应用</div><footer><span id="resultCount">0 条</span><span>数据只用于发现线索，不能替代留存与付费验证</span></footer></div>
+      <aside class="inspector" id="inspector"><div class="inspector-empty"><strong>选择一条应用</strong><p>查看排名快照、需求证据、竞品和评论主题。</p></div></aside>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast"></div><script type="module" src="app.js"></script></body></html>

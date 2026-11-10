@@ -15,7 +15,10 @@ const send = (res, status, body, type="application/json; charset=utf-8") => { re
 async function readSnapshots(){ try { return JSON.parse(await fs.readFile(snapshotFile,"utf8")); } catch { return []; } }
 function fetchText(url){
   return new Promise((resolve,reject)=>{
-    execFile("/usr/bin/curl",["-4","-fsSL","--max-time","30","-A","Mozilla/5.0 GoonTrendRadar/0.1",url],{maxBuffer:10*1024*1024},(error,stdout)=>error?reject(new Error(error.killed?"榜单请求超时":`榜单请求失败：${error.message}`)):resolve(stdout));
+    execFile("/usr/bin/curl",["-4","-fsSL","--max-time","20","-A","Mozilla/5.0 GoonTrendRadar/0.1",url],{maxBuffer:10*1024*1024},(error,stdout)=>{
+      if(!error||error.code===28&&stdout.includes('itemListElement')) return resolve(stdout);
+      reject(new Error(error.killed?"榜单请求超时":`榜单请求失败：${error.message}`));
+    });
   });
 }
 async function syncGooglePlay(){

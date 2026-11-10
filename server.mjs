@@ -80,6 +80,29 @@ async function syncAll(){
   if(!Object.keys(results).length) throw new Error(Object.values(errors).join('；'));
   return {date:new Date().toISOString().slice(0,10),results,errors};
 }
+const clusterRules=[
+  ['AI照片视频',/(ai photo|ai video|photo.*ai|video maker|portrait|image generator)/i],
+  ['短剧观看',/(short drama|short film|reelshort|netshort|drama)/i],
+  ['手机清理',/(clean|storage|battery|phone fix|file cleaner)/i],
+  ['文件传输',/(file share|transfer|sharekaro|send files)/i],
+  ['虚拟通话',/(prank call|video call|fake call|idol call)/i],
+  ['购物优惠',/(coupon|deal|promo|shopping|marketplace|wishlist|shop|buy|sell)/i],
+  ['AI助手',/(chatgpt|claude|gemini|grok|ai assistant|copilot)/i],
+  ['社交通讯',/(messenger|telegram|whatsapp|instagram|threads|discord|social)/i],
+  ['音乐创作',/(music maker|draw music|sound maker|audio editor)/i],
+  ['音乐流媒体',/(spotify|music streaming|podcast player)/i],
+  ['财务交易',/(finance|bank|capital one|paypal|stock trade|wallet)/i],
+  ['求职招聘',/(job|career|indeed|resume|hire)/i],
+  ['家庭安全',/(family|safety|gps|location tracker)/i],
+  ['宗教阅读',/(bible|devotional|prayer|quran)/i],
+  ['效率工具',/(productivity|authenticator|calendar|note|focus|email)/i]
+];
+function classifyDemand(item){
+  const text=[item.name,item.subtitle,item.category].filter(Boolean).join(' ');
+  const match=clusterRules.find(([,pattern])=>pattern.test(text));
+  if(match) return {cluster:match[0],clusterMethod:'规则匹配'};
+  return {cluster:item.category&&item.category!=='待聚类'?`类别：${item.category}`:'待聚类',clusterMethod:'类别回退'};
+}
 async function buildTrackedApps(){
   const snapshots=(await readSnapshots()).sort((a,b)=>a.date.localeCompare(b.date));
   const sources=[...new Set(snapshots.map(x=>x.source))];
@@ -95,8 +118,20 @@ async function buildTrackedApps(){
       const lastThree=rankHistory.slice(-3);
       const continuous=lastThree.length===3&&lastThree.every((x,i)=>i===0||x.rank<lastThree[i-1].rank);
       const trend=continuous?'连续上升':rankHistory.length<2?'待观察':rankDelta>0?'上升':rankDelta<0?'回落':'持平';
-      apps.push({...item,source,id:`${source}-${item.id}`,rankDelta,rankHistory,historyDays:rankHistory.length,trend,timeline:rankHistory.map(x=>`${x.date} · 排名 #${x.rank}`)});
+      apps.push({...item,source,id:`${source}-${item.id}`,...classifyDemand(item),rankDelta,rankHistory,historyDays:rankHistory.length,trend,timeline:rankHistory.map(x=>`${x.date} · 排名 #${x.rank}`)});
     }
+  }
+  const clusterPlatforms=new Map();
+  for(const app of apps){
+    if(app.cluster==='待聚类'||app.clusterMethod!=='规则匹配') continue;
+    if(!clusterPlatforms.has(app.cluster)) clusterPlatforms.set(app.cluster,new Set());
+    clusterPlatforms.get(app.cluster).add(app.platform);
+  }
+  for(const app of apps){
+    const platforms=[...(clusterPlatforms.get(app.cluster)||[])];
+    app.crossPlatform=platforms.includes('Android')&&platforms.includes('iOS');
+    app.crossPlatforms=platforms;
+    if(app.crossPlatform&&app.trend!=='连续上升') app.trend='跨平台信号';
   }
   return {updatedAt:snapshots.at(-1)?.date||null,apps};
 }

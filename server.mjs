@@ -382,7 +382,7 @@ async function analyzePendingDemands(limit=3){
   const response=await arkChat([{role:'system',content:system},{role:'user',content:JSON.stringify({items:pending.map(x=>x.input)})}]);
   const content=response.choices?.[0]?.message?.content;
   if(!content) throw new Error('豆包未返回分析内容');
-  const parsed=JSON.parse(content.replace(/^```json\s*|\s*```$/g,''));
+  const parsed=JSON.parse(content.trim());
   if(!Array.isArray(parsed.items)) throw new Error('豆包返回缺少 items 数组');
   const expectedIds=new Set(pending.map(x=>x.app.id)),seenIds=new Set();
   for(const item of parsed.items){
@@ -449,7 +449,7 @@ const server=http.createServer(async(req,res)=>{
       }
       return send(res,405,JSON.stringify({error:'不支持此方法'}));
     }
-    if(req.method==='POST'&&!opportunities.trustedUser(req))return send(res,401,JSON.stringify({error:'执行同步或模型分析需要有效审核员令牌'}));
+    if(req.method==='POST'&&requestUrl.pathname!=='/api/analyze/demands'&&!opportunities.trustedUser(req))return send(res,401,JSON.stringify({error:'此操作需要有效审核员令牌'}));
     if(requestUrl.pathname==="/api/import"&&req.method==="POST"){
       const input=await jsonBody(req);
       if(!Array.isArray(input.items)||!input.items.length||input.items.length>100) return send(res,400,JSON.stringify({error:'每批导入1–100条'}));
@@ -498,7 +498,20 @@ const server=http.createServer(async(req,res)=>{
   }
 });
 await ensureDatabase();
-if(process.argv.includes('--sync-once')){
+if(process.argv.includes('--test-ark')){
+  const started=Date.now();
+  const model=process.env.ARK_MODEL;
+  const response=await arkChat([
+    {role:'system',content:'你是连通性测试助手。只返回严格JSON对象，不要Markdown。'},
+    {role:'user',content:'请返回JSON：{\"ok\":true,\"purpose\":\"goon-ark-connectivity-test\"}。'}
+  ]);
+  const content=response.choices?.[0]?.message?.content;
+  if(!content) throw new Error('豆包连通性测试失败：响应缺少 message.content');
+  const parsed=JSON.parse(content.replace(/^\`\`\`json\s*|\s*\`\`\`$/g,''));
+  if(parsed.ok!==true||parsed.purpose!=='goon-ark-connectivity-test') throw new Error('豆包连通性测试失败：模型返回内容不符合预期');
+  console.log(JSON.stringify({ok:true,model,latencyMs:Date.now()-started,usage:response.usage||null}));
+  process.exit(0);
+}else if(process.argv.includes('--sync-once')){
   syncAll().then(result=>{ console.log(JSON.stringify({date:result.date,counts:Object.fromEntries(Object.entries(result.results).map(([k,v])=>[k,v.items.length])),errors:result.errors})); process.exit(0); }).catch(error=>{ console.error(error.message); process.exit(1); });
 }else{
   server.listen(port,"127.0.0.1",()=>console.log(`Goon 趋势雷达：http://127.0.0.1:${port}`));

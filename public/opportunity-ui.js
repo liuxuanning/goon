@@ -22,7 +22,7 @@ export function showOpportunityWorkflow(app){
  const login=el('button',{className:'secondary',type:'button'},'读取证据');
  tokenLine.append(tokenInput,login);panel.append(tokenLine);
  const content=el('div');panel.append(content);parent.append(panel);
- const api=()=>'/api/opportunities/'+encodeURIComponent(app.id);
+ const api=()=>'api/opportunities/'+encodeURIComponent(app.id);
  const token=()=>tokenInput.value.trim();
  const note=message=>{content.replaceChildren(el('p',{className:'sub'},message));};
  const request=async(body)=>{
@@ -48,7 +48,7 @@ export function showOpportunityWorkflow(app){
    const data=await request();if(serial!==generation||!parent.contains(panel))return;
    content.replaceChildren();
    const {opportunity,evidence,reviews,audit}=data;
-   const cRes=await fetch('/api/candidates',{headers:{Authorization:'Bearer '+token()}});
+   const cRes=await fetch('api/candidates',{headers:{Authorization:'Bearer '+token()}});
    if(cRes.ok){
      const cData=await cRes.json();
      const current=cData.items.find(x=>x.app_id===app.id);
@@ -65,7 +65,7 @@ export function showOpportunityWorkflow(app){
      taskForm.onsubmit=async e=>{
        e.preventDefault();saveTask.disabled=true;
        try{
-         const resp=await fetch('/api/candidates',{method:'POST',headers:{Authorization:'Bearer '+token(),'Content-Type':'application/json'},body:JSON.stringify({appId:app.id,status:taskStatus.value,assignedTo:owner.value,note:taskNote.value})});
+         const resp=await fetch('api/candidates',{method:'POST',headers:{Authorization:'Bearer '+token(),'Content-Type':'application/json'},body:JSON.stringify({appId:app.id,status:taskStatus.value,assignedTo:owner.value,note:taskNote.value})});
          const result=await resp.json();
          if(!resp.ok)throw new Error(result.error||'保存失败');
          window.dispatchEvent(new Event('goonCandidatesUpdated'));

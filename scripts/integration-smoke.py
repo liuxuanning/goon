@@ -1,6 +1,7 @@
 """Offline integration smoke test. Uses a disposable SQLite database and synthetic evidence only."""
 from __future__ import annotations
 import json, os, pathlib, sqlite3, subprocess, tempfile, time, urllib.error, urllib.parse, urllib.request
+from contextlib import closing
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 APP="Fixtures-opc-fixture"
@@ -74,6 +75,35 @@ def main():
             assert len(data["audit"])==9
             assert request(path,{"action":"review","verdict":"reject",
               "note":"This duplicate must be rejected.","ratings":RATINGS},A)[0]==409
+            # V0.2.1: shared import, duplicate import, noise and restart persistence.
+            payload={"items":[{"name":"Synthetic imported app","description":"Test fixture only","platform":"Web","url":"https://example.com/imported"}]}
+            assert request('/api/import',payload)[0]==401
+            assert request('/api/import',payload,A)[0]==200
+            assert request('/api/import',payload,B)[0]==200
+            items=request('/api/apps?window=7')[1]['apps']
+            imported=[x for x in items if x['source']=='手动导入']
+            assert len(imported)==1, imported
+            imported_id=imported[0]['id']
+            assert request('/api/flags',{'appId':imported_id,'noise':True})[0]==401
+            assert request('/api/flags',{'appId':imported_id,'noise':True},A)[0]==200
+            assert next(x for x in request('/api/apps')[1]['apps'] if x['id']==imported_id)['noise'] is True
+            proc.terminate();proc.wait(timeout=10)
+            proc=subprocess.Popen(["node","server.mjs"],cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            for attempt in range(40):
+                try:
+                    if request("/api/apps")[0]==200: break
+                except (urllib.error.URLError,TimeoutError): time.sleep(0.2)
+            else: raise RuntimeError("server did not restart")
+            items=request('/api/apps')[1]['apps']
+            assert len([x for x in items if x['id']==imported_id])==1
+            assert next(x for x in items if x['id']==imported_id)['noise'] is True
+            assert request('/api/flags',{'appId':imported_id,'noise':False},B)[0]==200
+            assert not next(x for x in request('/api/apps')[1]['apps'] if x['id']==imported_id).get('noise')
+            with closing(sqlite3.connect(db)) as con:
+                assert con.execute("SELECT count(*) FROM snapshots").fetchone()[0]==7
+                assert con.execute("SELECT count(*) FROM imported_apps").fetchone()[0]==1
+                assert con.execute("PRAGMA integrity_check").fetchone()[0]=='ok'
+            print(json.dumps({"import_dedup":True,"noise_persistence":True,"restart_persistence":True,"original_snapshots_preserved":7,"sqlite_integrity":"ok"},ensure_ascii=False))
             print(json.dumps({"passed":True,"verified_sources":3,"independent_reviewers":2,
               "human_score":80,"decision":data["opportunity"]["decision"],"shared_assignment":True,"audit_entries":len(data["audit"]),
               "production_data_touched":False},ensure_ascii=False))

@@ -26,11 +26,11 @@ try {
 }
 
 const publicDir = path.join(root, "public");
-const snapshotFile = path.join(root, "data", "snapshots.json");
 const port = Number(process.env.GOON_PORT || 4173);
 const curlBin = process.platform === "win32" ? "curl.exe" : "/usr/bin/curl";
 const sqliteBin = process.env.GOON_SQLITE_BIN;
-const databaseFile = process.env.GOON_DB_FILE;
+const databaseFile = process.env.GOON_DB_FILE ? path.resolve(root,process.env.GOON_DB_FILE) : null;
+if(databaseFile) process.env.GOON_DB_FILE=databaseFile;
 let databaseReady;
 
 const mime = { ".html":"text/html; charset=utf-8", ".css":"text/css; charset=utf-8", ".js":"text/javascript; charset=utf-8", ".json":"application/json; charset=utf-8" };
@@ -50,8 +50,9 @@ function sqlite(args,input){
   });
 }
 async function ensureDatabase(){
-  if(!sqliteBin||!databaseFile) return false;
+  if(!sqliteBin||!databaseFile) throw new Error("SQLite configuration required: GOON_SQLITE_BIN and GOON_DB_FILE");
   if(!databaseReady) databaseReady=(async()=>{
+    await fs.access(sqliteBin);
     await fs.mkdir(path.dirname(databaseFile),{recursive:true});
     const schema=`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS snapshots (date TEXT NOT NULL, source TEXT NOT NULL, items_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(date,source));
@@ -59,28 +60,20 @@ CREATE TABLE IF NOT EXISTS candidates (app_id TEXT PRIMARY KEY, status TEXT NOT 
 CREATE TABLE IF NOT EXISTS labels (app_id TEXT NOT NULL, label TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(app_id,label));
 CREATE TABLE IF NOT EXISTS app_analysis (app_id TEXT PRIMARY KEY, input_hash TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL, input_json TEXT NOT NULL, result_json TEXT NOT NULL, review_status TEXT NOT NULL DEFAULT 'unreviewed', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS activity_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, app_id TEXT, detail TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS imported_apps (app_id TEXT PRIMARY KEY, item_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS app_flags (app_id TEXT PRIMARY KEY, noise INTEGER NOT NULL CHECK(noise IN (0,1)), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES(201);
 CREATE TABLE IF NOT EXISTS sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, status TEXT NOT NULL, item_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`;
     await sqlite([databaseFile],schema);
-    const count=Number((await sqlite(['-noheader',databaseFile,'SELECT count(*) FROM snapshots;'])).trim()||0);
-    if(count===0){
-      try{
-        const legacy=JSON.parse(await fs.readFile(snapshotFile,'utf8'));
-        if(legacy.length){
-          const inserts=legacy.map(s=>`INSERT OR REPLACE INTO snapshots(date,source,items_json) VALUES(${sqlQuote(s.date)},${sqlQuote(s.source)},${sqlQuote(JSON.stringify(s.items))});`).join('\n');
-          await sqlite([databaseFile],`PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; ${inserts} COMMIT;`);
-        }
-      }catch{}
-    }
   })();
   await databaseReady;
   return true;
 }
 async function readSnapshots(){
-  if(await ensureDatabase()){
-    const output=await sqlite(['-json',databaseFile,'SELECT date,source,items_json FROM snapshots ORDER BY date,source;']);
-    return JSON.parse(output||'[]').map(row=>({date:row.date,source:row.source,items:JSON.parse(row.items_json)}));
-  }
-  try { return JSON.parse(await fs.readFile(snapshotFile,"utf8")); } catch { return []; }
+  await ensureDatabase();
+  const output=await sqlite(['-json',databaseFile,'SELECT date,source,items_json FROM snapshots ORDER BY date,source;']);
+  return JSON.parse(output||'[]').map(row=>({date:row.date,source:row.source,items:JSON.parse(row.items_json)}));
 }
 function fetchText(url){
   return new Promise((resolve,reject)=>{
@@ -170,15 +163,10 @@ async function enrichGooglePlayItem(item,observedAt){
   };
 }
 async function saveSnapshot(source,date,items){
-  if(await ensureDatabase()){
-    const sql=`PRAGMA busy_timeout=5000; INSERT INTO snapshots(date,source,items_json) VALUES(${sqlQuote(date)},${sqlQuote(source)},${sqlQuote(JSON.stringify(items))}) ON CONFLICT(date,source) DO UPDATE SET items_json=excluded.items_json,created_at=CURRENT_TIMESTAMP;`;
-    await sqlite([databaseFile],sql);
-    return Number((await sqlite(['-noheader',databaseFile,`SELECT count(DISTINCT date) FROM snapshots WHERE source=${sqlQuote(source)};`])).trim()||0);
-  }
-  const snapshots=await readSnapshots();
-  const next=[...snapshots.filter(s=>!(s.date===date&&s.source===source)),{date,source,items}].slice(-180);
-  await fs.writeFile(snapshotFile,JSON.stringify(next,null,2),"utf8");
-  return new Set(next.filter(x=>x.source===source).map(x=>x.date)).size;
+  await ensureDatabase();
+  const sql=`PRAGMA busy_timeout=5000; INSERT INTO snapshots(date,source,items_json) VALUES(${sqlQuote(date)},${sqlQuote(source)},${sqlQuote(JSON.stringify(items))}) ON CONFLICT(date,source) DO UPDATE SET items_json=excluded.items_json,created_at=CURRENT_TIMESTAMP;`;
+  await sqlite([databaseFile],sql);
+  return Number((await sqlite(['-noheader',databaseFile,`SELECT count(DISTINCT date) FROM snapshots WHERE source=${sqlQuote(source)};`])).trim()||0);
 }
 async function syncGooglePlay(){
   const html = await fetchText("https://appsxray.com/charts?chart=new-free");
@@ -328,6 +316,9 @@ async function buildTrackedApps(windowDays=7){
       apps.push({...item,source,id:`${source}-${item.id}`,...classified,rankDelta,rankHistory,ratingHistory,ratingCountDelta,historyDays:rankHistory.length,lastSeenDate,trend,trendChange,dataStatus,dataQuality,fieldMeta,timeline:rankHistory.map(x=>`${x.date} · ${isAppStore?'Feed位置':'榜单排名'} #${x.rank}`)});
     }
   }
+  const imported=JSON.parse(await sqlite(['-json',databaseFile,'SELECT item_json FROM imported_apps;'])||'[]');
+  apps.push(...imported.map(r=>JSON.parse(r.item_json)));
+  const flags=new Set(JSON.parse(await sqlite(['-json',databaseFile,'SELECT app_id FROM app_flags WHERE noise=1;'])||'[]').map(r=>r.app_id));
   const clusterPlatforms=new Map();
   for(const app of apps){
     if(app.cluster==='待聚类'||app.clusterMethod!=='规则匹配') continue;
@@ -348,6 +339,7 @@ async function buildTrackedApps(windowDays=7){
       app.aiAnalysis=analysis?{...analysis,stale:analysis.inputHash!==inputHash(analysisInput(app))||analysis.model!==process.env.ARK_MODEL||analysis.promptVersion!==analysisPromptVersion}:null;
     }
   }
+  for(const app of apps){if(flags.has(app.id)){app.trend="噪声";app.dataStatus="噪声";app.noise=true;}}
   return {updatedAt:snapshots.at(-1)?.date||null,apps};
 }
 
@@ -458,6 +450,28 @@ const server=http.createServer(async(req,res)=>{
       return send(res,405,JSON.stringify({error:'不支持此方法'}));
     }
     if(req.method==='POST'&&!opportunities.trustedUser(req))return send(res,401,JSON.stringify({error:'执行同步或模型分析需要有效审核员令牌'}));
+    if(requestUrl.pathname==="/api/import"&&req.method==="POST"){
+      const input=await jsonBody(req);
+      if(!Array.isArray(input.items)||!input.items.length||input.items.length>100) return send(res,400,JSON.stringify({error:'每批导入1–100条'}));
+      const rows=input.items.map(x=>{
+        const field=(k,n=1000)=>String(x[k]??'').trim().slice(0,n);
+        const name=field('name',200);
+        if(!name) throw Object.assign(new Error('产品名称不能为空'),{status:400});
+        const url=field('url',2000);
+        if(url&&!/^https?:\/\//i.test(url)) throw Object.assign(new Error('来源链接必须为HTTP(S)'),{status:400});
+        const id='manual-'+createHash('sha256').update(JSON.stringify([name,url,field('platform',80)])).digest('hex');
+        return {id,name,description:field('description',4000),url,source:'手动导入',platform:field('platform',80)||'待核验',country:field('country',80)||'待核验',category:field('category',100)||'待聚类',developer:field('developer',200)||'待核验',launchDate:field('launchDate',30)||'待核验',cluster:'待聚类',clusterMethod:'人工导入',trend:'待积累',dataStatus:'数据不足',historyDays:0,rankHistory:[],timeline:['人工导入，尚未交叉核验']};
+      });
+      await ensureDatabase();
+      await sqlite([databaseFile],'PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; '+rows.map(x=>`INSERT INTO imported_apps(app_id,item_json) VALUES(${sqlQuote(x.id)},${sqlQuote(JSON.stringify(x))}) ON CONFLICT(app_id) DO UPDATE SET item_json=excluded.item_json,updated_at=CURRENT_TIMESTAMP;`).join('\n')+' COMMIT;');
+      return send(res,200,JSON.stringify({imported:rows.length}));
+    }
+    if(requestUrl.pathname==="/api/flags"&&req.method==="POST"){
+      const input=await jsonBody(req);
+      if(typeof input.noise!=='boolean'||!(await buildTrackedApps(30)).apps.some(a=>a.id===input.appId))return send(res,400,JSON.stringify({error:'无效产品或标记'}));
+      await sqlite([databaseFile],`PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; INSERT INTO app_flags(app_id,noise) VALUES(${sqlQuote(input.appId)},${input.noise?1:0}) ON CONFLICT(app_id) DO UPDATE SET noise=excluded.noise,updated_at=CURRENT_TIMESTAMP; INSERT INTO activity_logs(action,app_id,detail) VALUES('noise_updated',${sqlQuote(input.appId)},${sqlQuote(JSON.stringify({noise:input.noise,actor:opportunities.trustedUser(req)}))}); COMMIT;`);
+      return send(res,200,JSON.stringify({ok:true}));
+    }
     if(req.url==="/api/sync/google-play"&&req.method==="POST") return send(res,200,JSON.stringify(await syncGooglePlay()));
     if(req.url==="/api/sync/app-store"&&req.method==="POST") return send(res,200,JSON.stringify(await syncAppStore()));
     if(req.url==="/api/sync/product-hunt"&&req.method==="POST") return send(res,200,JSON.stringify(await syncProductHunt()));
@@ -473,14 +487,17 @@ const server=http.createServer(async(req,res)=>{
     if(requestUrl.pathname==="/api/analyze/demands"&&req.method==="POST") return send(res,200,JSON.stringify(await analyzePendingDemands(Number(requestUrl.searchParams.get('limit')||3))));
     const clean=requestUrl.pathname==="/"?"index.html":requestUrl.pathname.replace(/^\//,"");
     const file=path.resolve(publicDir,clean);
-    if(!file.startsWith(path.resolve(publicDir))) return send(res,403,"Forbidden","text/plain");
+    if(!file.startsWith(path.resolve(publicDir)+path.sep)) return send(res,403,"Forbidden","text/plain");
+    if(!(await fs.stat(file)).isFile()) return send(res,404,"Not found","text/plain");
     const data=await fs.readFile(file);
     return send(res,200,data,mime[path.extname(file)]||"application/octet-stream");
   }catch(error){
-    if(error.code==="ENOENT") return send(res,404,"Not found","text/plain");
+    if(error.code==="ENOENT"&&!req.url.startsWith("/api/")) return send(res,404,"Not found","text/plain");
+    console.error("Request failed:",error.code||error.status||"error");
     return send(res,error.status||500,JSON.stringify({error:error.message}));
   }
 });
+await ensureDatabase();
 if(process.argv.includes('--sync-once')){
   syncAll().then(result=>{ console.log(JSON.stringify({date:result.date,counts:Object.fromEntries(Object.entries(result.results).map(([k,v])=>[k,v.items.length])),errors:result.errors})); process.exit(0); }).catch(error=>{ console.error(error.message); process.exit(1); });
 }else{

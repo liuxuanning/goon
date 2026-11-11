@@ -68,6 +68,43 @@ function curlText(args, acceptPartial=false){
     });
   });
 }
+function parseJsonLd(html,type){
+  const blocks=[...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for(const block of blocks){
+    try{
+      const parsed=JSON.parse(block[1]);
+      const values=Array.isArray(parsed)?parsed:[parsed];
+      const found=values.find(x=>x?.['@type']===type);
+      if(found) return found;
+    }catch{}
+  }
+  return null;
+}
+async function enrichGooglePlayItem(item,observedAt){
+  const detailsUrl=`https://play.google.com/store/apps/details?id=${encodeURIComponent(item.id)}&hl=en&gl=US`;
+  const html=await curlText([detailsUrl]);
+  const meta=parseJsonLd(html,'SoftwareApplication');
+  if(!meta) throw new Error(`Google Play 详情页未找到结构化数据：${item.id}`);
+  const updatedMatch=html.match(/>Updated on<\/div><div[^>]*>([^<]+)<\/div>/i);
+  const updatedTime=updatedMatch?new Date(updatedMatch[1]):null;
+  return {
+    ...item,
+    detailsUrl,
+    description:meta.description||null,
+    developer:meta.author?.name||null,
+    developerUrl:meta.author?.url||null,
+    category:meta.applicationCategory||item.category,
+    rating:meta.aggregateRating?.ratingValue?Number(meta.aggregateRating.ratingValue):null,
+    ratingCount:meta.aggregateRating?.ratingCount?Number(meta.aggregateRating.ratingCount):0,
+    updatedDate:updatedTime&&!Number.isNaN(updatedTime.getTime())?updatedTime.toISOString().slice(0,10):null,
+    contentRating:meta.contentRating||null,
+    iconUrl:meta.image||null,
+    observedAt,
+    fieldSources:{
+      name:'AppsXRay 新品榜',position:'AppsXRay 新品榜',developer:'Google Play 官方详情页',description:'Google Play 官方详情页',category:'Google Play 官方详情页',rating:'Google Play 官方详情页',updatedDate:'Google Play 官方详情页'
+    }
+  };
+}
 async function saveSnapshot(source,date,items){
   if(await ensureDatabase()){
     const sql=`PRAGMA busy_timeout=5000; INSERT INTO snapshots(date,source,items_json) VALUES(${sqlQuote(date)},${sqlQuote(source)},${sqlQuote(JSON.stringify(items))}) ON CONFLICT(date,source) DO UPDATE SET items_json=excluded.items_json,created_at=CURRENT_TIMESTAMP;`;
@@ -88,7 +125,10 @@ async function syncGooglePlay(){
   }
   if(!list?.itemListElement?.length) throw new Error("页面可访问，但没有识别到新品榜数据；数据源页面结构可能已变化。");
   const date = new Date().toISOString().slice(0,10);
-  const items = list.itemListElement.map(x=>({ id:x.url?.split("/").pop()||x.name, name:x.name, rank:x.position, source:"Google Play 新品榜", url:x.url, country:"美国", platform:"Android", category:"待聚类" }));
+  const rawItems = list.itemListElement.map(x=>({ id:x.url?.split("/").pop()||x.name, name:x.name, rank:x.position, source:"Google Play 新品榜", url:x.url, country:"美国", platform:"Android", category:"待聚类" }));
+  const observedAt=new Date().toISOString();
+  const enriched=await Promise.allSettled(rawItems.map(item=>enrichGooglePlayItem(item,observedAt)));
+  const items=enriched.map((result,index)=>result.status==='fulfilled'?result.value:{...rawItems[index],observedAt,fieldSources:{name:'AppsXRay 新品榜',position:'AppsXRay 新品榜'},enrichmentError:result.reason.message});
   const historyDays=await saveSnapshot("Google Play 新品榜",date,items);
   return { source:"Google Play 新品榜",date,items,historyDays,sourceUrl:"https://appsxray.com/charts?chart=new-free" };
 }
@@ -99,7 +139,8 @@ async function syncAppStore(){
   const date=new Date().toISOString().slice(0,10);
   const tomorrow=Date.now()+864e5;
   const entries=data.feed.entry.filter(x=>new Date(x['im:releaseDate']?.label||0).getTime()<=tomorrow).slice(0,100);
-  const items=entries.map((x,index)=>({id:x.id?.attributes?.['im:id']||x.id?.label,name:x['im:name']?.label,rank:index+1,source:"App Store",url:x.link?.attributes?.href||x.id?.label,country:"美国",platform:"iOS",category:x.category?.attributes?.label||"待聚类",developer:x['im:artist']?.label||"待核验",launchDate:x['im:releaseDate']?.label?.slice(0,10)||"待核验"}));
+  const observedAt=new Date().toISOString();
+  const items=entries.map((x,index)=>({id:x.id?.attributes?.['im:id']||x.id?.label,name:x['im:name']?.label,rank:index+1,source:"App Store",url:x.link?.attributes?.href||x.id?.label,country:"美国",platform:"iOS",category:x.category?.attributes?.label||"待聚类",developer:x['im:artist']?.label||"待核验",launchDate:x['im:releaseDate']?.label?.slice(0,10)||"待核验",observedAt,fieldSources:{name:'Apple 新应用 Feed',position:'Apple 新应用 Feed（非市场排名）',developer:'Apple 新应用 Feed',launchDate:'Apple 新应用 Feed',category:'Apple 新应用 Feed'}}));
   const lookupBatches=[];
   for(let i=0;i<items.length;i+=50) lookupBatches.push(items.slice(i,i+50));
   const lookups=await Promise.allSettled(lookupBatches.map(batch=>curlText([`https://itunes.apple.com/lookup?id=${batch.map(x=>x.id).join(',')}&country=us&entity=software`])));
@@ -115,6 +156,13 @@ async function syncAppStore(){
     item.ratingCount=meta.userRatingCount??0;
     item.version=meta.version||null;
     item.category=meta.primaryGenreName||item.category;
+    item.description=meta.description||null;
+    item.updatedDate=meta.currentVersionReleaseDate?.slice(0,10)||null;
+    item.developerUrl=meta.sellerUrl||meta.artistViewUrl||null;
+    item.contentRating=meta.trackContentRating||null;
+    item.price=meta.formattedPrice||null;
+    item.iconUrl=meta.artworkUrl100||null;
+    item.fieldSources={...item.fieldSources,description:'Apple Lookup 官方接口',rating:'Apple Lookup 官方接口',version:'Apple Lookup 官方接口',updatedDate:'Apple Lookup 官方接口'};
   }
   const historyDays=await saveSnapshot("App Store",date,items);
   return {source:"App Store",date,items,historyDays,sourceUrl};
@@ -184,13 +232,16 @@ async function buildTrackedApps(){
       const developerKnown=Boolean(item.developer&&item.developer!=='待核验');
       const launchKnown=Boolean(item.launchDate&&item.launchDate!=='待核验');
       const ratingKnown=Number(item.ratingCount)>0;
-      const dataStatus=source==='Google Play 新品榜'&&(!developerKnown||!launchKnown)?'数据不足':rankHistory.length<3?'待积累':'基础可用';
+      const descriptionKnown=Boolean(item.description);
+      const dataStatus=!developerKnown||!descriptionKnown?'数据不足':rankHistory.length<3?'待积累':'基础可用';
       const fieldMeta={
-        name:'原始数据',
-        position:isAppStore?'原始数据 · Feed位置（非市场排名）':'第三方榜单排名',
-        developer:developerKnown?'原始数据':'未获取',
-        launchDate:launchKnown?'原始数据':'未获取',
-        rating:ratingKnown?'原始数据':'暂无有效数据',
+        name:item.fieldSources?.name||'原始数据',
+        position:item.fieldSources?.position||(isAppStore?'原始数据 · Feed位置（非市场排名）':'第三方榜单排名'),
+        developer:developerKnown?(item.fieldSources?.developer||'原始数据'):'未获取',
+        launchDate:launchKnown?(item.fieldSources?.launchDate||'原始数据'):'未获取',
+        description:descriptionKnown?(item.fieldSources?.description||'原始数据'):'未获取',
+        rating:ratingKnown?(item.fieldSources?.rating||'原始数据'):'暂无有效数据',
+        updatedDate:item.updatedDate?(item.fieldSources?.updatedDate||'原始数据'):'未获取',
         cluster:classified.clusterMethod==='规则匹配'?'系统推断 · 关键词规则':'类别映射 · 非需求结论'
       };
       const trendChange=isAppStore?`连续出现 ${rankHistory.length} 天`:rankDelta===null?'至少3天后计算':`${rankDelta>0?'+':''}${rankDelta}名`;

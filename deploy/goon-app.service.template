@@ -1,0 +1,21 @@
+[Unit]
+Description=Goon opportunity radar (local HTTP behind HTTPS proxy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=goon
+WorkingDirectory=/opt/goon/current
+EnvironmentFile=/etc/goon/goon.env
+Environment=GOON_REQUIRE_HTTPS=1
+ExecStart=/usr/bin/node /opt/goon/current/server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/goon /var/backups/goon
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Goon daily snapshot synchronization and SQLite backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=goon
+WorkingDirectory=/opt/goon/current
+EnvironmentFile=/etc/goon/goon.env
+ExecStart=/usr/bin/bash /opt/goon/current/scripts/run-daily.sh
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/goon /var/backups/goon
+PrivateTmp=true

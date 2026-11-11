@@ -2,4 +2,11 @@ data/snapshots.json
 node_modules/
 .env
 *.log
+data/*.sqlite3
+data/*.sqlite3-*
+data/*.db
+data/backups/
+data/*.sqlite3-shm
+data/*.sqlite3-wal
+dist/
 

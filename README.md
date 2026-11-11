@@ -29,3 +29,5 @@ npm start
 CSV 首行可使用：`name,source,platform,country,rank,category,launchDate,rating,ratingCount,url`。
 
 公开榜单只是需求线索，不代表收入、留存或产品机会已经成立。建议积累至少 7 天快照，再结合评论、搜索趋势和付费验证做判断。
+
+生产环境使用独立 SQLite 数据库。通过 `GOON_SQLITE_BIN` 指定 SQLite 3.54.1 可执行文件，通过 `GOON_DB_FILE` 指定数据库路径；未设置时，本地开发仍使用 JSON 快照。

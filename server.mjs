@@ -9,11 +9,49 @@ const publicDir = path.join(root, "public");
 const snapshotFile = path.join(root, "data", "snapshots.json");
 const port = Number(process.env.GOON_PORT || 4173);
 const curlBin = process.platform === "win32" ? "curl.exe" : "/usr/bin/curl";
+const sqliteBin = process.env.GOON_SQLITE_BIN;
+const databaseFile = process.env.GOON_DB_FILE;
+let databaseReady;
 
 const mime = { ".html":"text/html; charset=utf-8", ".css":"text/css; charset=utf-8", ".js":"text/javascript; charset=utf-8", ".json":"application/json; charset=utf-8" };
 const send = (res, status, body, type="application/json; charset=utf-8") => { res.writeHead(status,{"content-type":type,"cache-control":"no-store"}); res.end(body); };
 
-async function readSnapshots(){ try { return JSON.parse(await fs.readFile(snapshotFile,"utf8")); } catch { return []; } }
+const sqlQuote=value=>`'${String(value).replace(/'/g,"''")}'`;
+function sqlite(args){
+  return new Promise((resolve,reject)=>execFile(sqliteBin,args,{maxBuffer:20*1024*1024},(error,stdout,stderr)=>error?reject(new Error(stderr||error.message)):resolve(stdout)));
+}
+async function ensureDatabase(){
+  if(!sqliteBin||!databaseFile) return false;
+  if(!databaseReady) databaseReady=(async()=>{
+    await fs.mkdir(path.dirname(databaseFile),{recursive:true});
+    const schema=`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+CREATE TABLE IF NOT EXISTS snapshots (date TEXT NOT NULL, source TEXT NOT NULL, items_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(date,source));
+CREATE TABLE IF NOT EXISTS candidates (app_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'candidate', note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS labels (app_id TEXT NOT NULL, label TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(app_id,label));
+CREATE TABLE IF NOT EXISTS activity_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT NOT NULL, app_id TEXT, detail TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, status TEXT NOT NULL, item_count INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`;
+    await sqlite([databaseFile,schema]);
+    const count=Number((await sqlite(['-noheader',databaseFile,'SELECT count(*) FROM snapshots;'])).trim()||0);
+    if(count===0){
+      try{
+        const legacy=JSON.parse(await fs.readFile(snapshotFile,'utf8'));
+        if(legacy.length){
+          const inserts=legacy.map(s=>`INSERT OR REPLACE INTO snapshots(date,source,items_json) VALUES(${sqlQuote(s.date)},${sqlQuote(s.source)},${sqlQuote(JSON.stringify(s.items))});`).join('\n');
+          await sqlite([databaseFile,`PRAGMA busy_timeout=5000; BEGIN IMMEDIATE; ${inserts} COMMIT;`]);
+        }
+      }catch{}
+    }
+  })();
+  await databaseReady;
+  return true;
+}
+async function readSnapshots(){
+  if(await ensureDatabase()){
+    const output=await sqlite(['-json',databaseFile,'SELECT date,source,items_json FROM snapshots ORDER BY date,source;']);
+    return JSON.parse(output||'[]').map(row=>({date:row.date,source:row.source,items:JSON.parse(row.items_json)}));
+  }
+  try { return JSON.parse(await fs.readFile(snapshotFile,"utf8")); } catch { return []; }
+}
 function fetchText(url){
   return new Promise((resolve,reject)=>{
     execFile(curlBin,["-4","-fsSL","--max-time","20","-A","Mozilla/5.0 GoonTrendRadar/0.1",url],{maxBuffer:10*1024*1024},(error,stdout)=>{
@@ -31,6 +69,11 @@ function curlText(args, acceptPartial=false){
   });
 }
 async function saveSnapshot(source,date,items){
+  if(await ensureDatabase()){
+    const sql=`PRAGMA busy_timeout=5000; INSERT INTO snapshots(date,source,items_json) VALUES(${sqlQuote(date)},${sqlQuote(source)},${sqlQuote(JSON.stringify(items))}) ON CONFLICT(date,source) DO UPDATE SET items_json=excluded.items_json,created_at=CURRENT_TIMESTAMP;`;
+    await sqlite([databaseFile,sql]);
+    return Number((await sqlite(['-noheader',databaseFile,`SELECT count(DISTINCT date) FROM snapshots WHERE source=${sqlQuote(source)};`])).trim()||0);
+  }
   const snapshots=await readSnapshots();
   const next=[...snapshots.filter(s=>!(s.date===date&&s.source===source)),{date,source,items}].slice(-180);
   await fs.writeFile(snapshotFile,JSON.stringify(next,null,2),"utf8");

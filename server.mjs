@@ -471,7 +471,7 @@ const server=http.createServer(async(req,res)=>{
       return send(res,200,JSON.stringify({runs:JSON.parse(history||'[]')}));
     }
     if(requestUrl.pathname==="/api/analyze/demands"&&req.method==="POST") return send(res,200,JSON.stringify(await analyzePendingDemands(Number(requestUrl.searchParams.get('limit')||3))));
-    const clean=req.url==="/"?"index.html":req.url.split("?")[0].replace(/^\//,"");
+    const clean=requestUrl.pathname==="/"?"index.html":requestUrl.pathname.replace(/^\//,"");
     const file=path.resolve(publicDir,clean);
     if(!file.startsWith(path.resolve(publicDir))) return send(res,403,"Forbidden","text/plain");
     const data=await fs.readFile(file);

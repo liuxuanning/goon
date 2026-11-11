@@ -89,13 +89,17 @@ function parseJsonLd(html,type){
   }
   return null;
 }
+function localIsoDate(value){
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
 async function enrichGooglePlayItem(item,observedAt){
   const detailsUrl=`https://play.google.com/store/apps/details?id=${encodeURIComponent(item.id)}&hl=en&gl=US`;
   const html=await curlText([detailsUrl]);
   const meta=parseJsonLd(html,'SoftwareApplication');
   if(!meta) throw new Error(`Google Play 详情页未找到结构化数据：${item.id}`);
   const updatedMatch=html.match(/>Updated on<\/div><div[^>]*>([^<]+)<\/div>/i);
-  const updatedTime=updatedMatch?new Date(updatedMatch[1]):null;
   return {
     ...item,
     detailsUrl,
@@ -105,7 +109,7 @@ async function enrichGooglePlayItem(item,observedAt){
     category:meta.applicationCategory||item.category,
     rating:meta.aggregateRating?.ratingValue?Number(meta.aggregateRating.ratingValue):null,
     ratingCount:meta.aggregateRating?.ratingCount?Number(meta.aggregateRating.ratingCount):0,
-    updatedDate:updatedTime&&!Number.isNaN(updatedTime.getTime())?updatedTime.toISOString().slice(0,10):null,
+    updatedDate:updatedMatch?localIsoDate(updatedMatch[1]):null,
     contentRating:meta.contentRating||null,
     iconUrl:meta.image||null,
     observedAt,

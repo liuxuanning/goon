@@ -32,3 +32,5 @@ CSV 首行可使用：`name,source,platform,country,rank,category,launchDate,rat
 公开榜单只是需求线索，不代表收入、留存或产品机会已经成立。建议积累至少 7 天快照，再结合评论、搜索趋势和付费验证做判断。
 
 生产环境使用独立 SQLite 数据库。通过 `GOON_SQLITE_BIN` 指定 SQLite 3.54.1 可执行文件，通过 `GOON_DB_FILE` 指定数据库路径；未设置时，本地开发仍使用 JSON 快照。
+
+当采集节点与网站服务器分离时，可使用 `node scripts/import-snapshots.mjs <快照文件>` 将经过核验的快照事务性写入生产 SQLite；脚本只按“日期 + 来源”更新对应快照，不删除其他历史数据。

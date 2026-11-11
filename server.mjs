@@ -173,13 +173,28 @@ async function buildTrackedApps(){
     const window=sourceSnaps.filter(x=>new Date(`${x.date}T00:00:00Z`).getTime()>=cutoff);
     for(const item of latest.items){
       const rankHistory=window.map(s=>({date:s.date,rank:s.items.find(x=>String(x.id)===String(item.id))?.rank})).filter(x=>Number.isFinite(x.rank));
-      const rankDelta=rankHistory.length>1?rankHistory[0].rank-rankHistory.at(-1).rank:null;
+      const isAppStore=source==='App Store';
+      const rankDelta=!isAppStore&&rankHistory.length>1?rankHistory[0].rank-rankHistory.at(-1).rank:null;
       const ratingHistory=window.map(s=>{const found=s.items.find(x=>String(x.id)===String(item.id));return found&&Number.isFinite(found.ratingCount)?{date:s.date,rating:found.rating??null,ratingCount:found.ratingCount}:null}).filter(Boolean);
       const ratingCountDelta=ratingHistory.length>1?ratingHistory.at(-1).ratingCount-ratingHistory[0].ratingCount:null;
       const lastThree=rankHistory.slice(-3);
-      const continuous=lastThree.length===3&&lastThree.every((x,i)=>i===0||x.rank<lastThree[i-1].rank);
-      const trend=continuous?'连续上升':rankHistory.length<2?'待观察':rankDelta>0?'上升':rankDelta<0?'回落':'持平';
-      apps.push({...item,source,id:`${source}-${item.id}`,...classifyDemand(item),rankDelta,rankHistory,ratingHistory,ratingCountDelta,historyDays:rankHistory.length,trend,timeline:rankHistory.map(x=>`${x.date} · 排名 #${x.rank}`)});
+      const continuous=!isAppStore&&lastThree.length===3&&lastThree.every((x,i)=>i===0||x.rank<lastThree[i-1].rank);
+      const trend=isAppStore?(rankHistory.length>=3?'持续出现':'待积累'):continuous?'连续上升':rankHistory.length<3?'待积累':rankDelta>0?'上升':rankDelta<0?'回落':'持平';
+      const classified=classifyDemand(item);
+      const developerKnown=Boolean(item.developer&&item.developer!=='待核验');
+      const launchKnown=Boolean(item.launchDate&&item.launchDate!=='待核验');
+      const ratingKnown=Number(item.ratingCount)>0;
+      const dataStatus=source==='Google Play 新品榜'&&(!developerKnown||!launchKnown)?'数据不足':rankHistory.length<3?'待积累':'基础可用';
+      const fieldMeta={
+        name:'原始数据',
+        position:isAppStore?'原始数据 · Feed位置（非市场排名）':'第三方榜单排名',
+        developer:developerKnown?'原始数据':'未获取',
+        launchDate:launchKnown?'原始数据':'未获取',
+        rating:ratingKnown?'原始数据':'暂无有效数据',
+        cluster:classified.clusterMethod==='规则匹配'?'系统推断 · 关键词规则':'类别映射 · 非需求结论'
+      };
+      const trendChange=isAppStore?`连续出现 ${rankHistory.length} 天`:rankDelta===null?'至少3天后计算':`${rankDelta>0?'+':''}${rankDelta}名`;
+      apps.push({...item,source,id:`${source}-${item.id}`,...classified,rankDelta,rankHistory,ratingHistory,ratingCountDelta,historyDays:rankHistory.length,trend,trendChange,dataStatus,fieldMeta,timeline:rankHistory.map(x=>`${x.date} · ${isAppStore?'Feed位置':'榜单排名'} #${x.rank}`)});
     }
   }
   const clusterPlatforms=new Map();

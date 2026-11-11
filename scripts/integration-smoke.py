@@ -42,6 +42,13 @@ def main():
                     if request("/api/apps")[0]==200: break
                 except (urllib.error.URLError,TimeoutError): time.sleep(0.2)
             else: raise RuntimeError("server did not start")
+            # V0.2.2: model analysis endpoint is independent from reviewer credentials.
+            # Static source assertions avoid a paid external model request in offline smoke tests.
+            server_source=(ROOT/"server.mjs").read_text(encoding="utf-8")
+            client_source=(ROOT/"public/app.js").read_text(encoding="utf-8")
+            assert "req.method==='POST'&&requestUrl.pathname!=='/api/analyze/demands'" in server_source
+            assert "fetch('api/analyze/demands?limit=3',{method:'POST'})" in client_source
+            assert "fetch('api/analyze/demands?limit=3',{method:'POST',headers" not in client_source
             path="/api/opportunities/"+urllib.parse.quote(APP,safe="")
             assert request(path)[0]==401
             assert request("/api/sync/all",{})[0]==401

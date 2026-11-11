@@ -1,0 +1,11 @@
+[Unit]
+Description=Goon daily data sync (China local time)
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=300
+Unit=goon-sync.service
+
+[Install]
+WantedBy=timers.target
